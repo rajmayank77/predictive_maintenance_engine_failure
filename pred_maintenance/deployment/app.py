@@ -1,11 +1,11 @@
 import streamlit as st 
-import pandas as pd 
-import joblib from huggingface_hub 
-import hf_hub_download 
+import pandas as pd
+import joblib 
+from huggingface_hub import hf_hub_download 
 
 model_path = hf_hub_download(
-    repo_id="rajmayank092018/predictive-maintenance-model", 
-    filename="xgboost_predictive_maintenance.pkl" 
+    repo_id="rajmayank092018/pred-engine-model", 
+    filename="pred_maintenance_model_v1.joblib" 
     ) 
 model = joblib.load(model_path) 
 st.title("Predictive Maintenance System") 
