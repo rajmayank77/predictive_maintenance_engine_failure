@@ -1,12 +1,11 @@
 from sklearn.model_selection import train_test_split
 import pandas as pd
-from google.colab import userdata
 from huggingface_hub import hf_hub_download
 # for hugging face space authentication to upload files
 from huggingface_hub import login, HfApi
 import os
 
-api = HfApi(token=os.getenv("HF_TOKEN"))
+api = HfApi(token=os.getenv('HF_TOKEN'))
 REPO_ID = "rajmayank092018/pred_engine_maintenance"
 
 try:
@@ -15,7 +14,7 @@ try:
         repo_id=REPO_ID,
         filename="data/engine_data.csv",
         repo_type="dataset",
-        token=userdata.get('HF_TOKEN')
+        token=os.getenv('HF_TOKEN')
     )
 
     data_df = pd.read_csv(local_file_path)
