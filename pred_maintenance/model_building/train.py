@@ -19,12 +19,13 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, GradientBoostingClassifier, BaggingClassifier
 from xgboost import XGBClassifier
 
+# Configure MLflow
 mlflow.set_tracking_uri("http://localhost:5000")
 mlflow.set_experiment("mlops-training-experiment")
 
 api = HfApi()
 
-
+# Data Paths
 Xtrain_path = "hf://datasets/rajmayank092018/pred-engine-maintenance/Xtrain.csv"
 Xtest_path = "hf://datasets/rajmayank092018/pred-engine-maintenance/Xtest.csv"
 ytrain_path = "hf://datasets/rajmayank092018/pred-engine-maintenance/ytrain.csv"
@@ -32,10 +33,10 @@ ytest_path = "hf://datasets/rajmayank092018/pred-engine-maintenance/ytest.csv"
 
 X_train = pd.read_csv(Xtrain_path)
 X_test = pd.read_csv(Xtest_path)
-y_train = pd.read_csv(ytrain_path)
-y_test = pd.read_csv(ytest_path)
 
-
+# FIX 1: Flatten targets to 1D arrays to prevent scikit-learn fit failure errors
+y_train = pd.read_csv(ytrain_path).values.ravel()
+y_test = pd.read_csv(ytest_path).values.ravel()
 
 models = {
     "Decision Tree": DecisionTreeClassifier(random_state=42),
@@ -78,11 +79,11 @@ with mlflow.start_run(run_name="Ensemble_Comparison_Experiment"):
             grid_search.fit(X_train, y_train)
 
             # Store the best estimator locally
-            best_model = grid_search.best_estimator_
-            best_models[name] = best_model 
+            best_model_obj = grid_search.best_estimator_
+            best_models[name] = best_model_obj 
 
             # Predictions
-            preds = best_model.predict(X_test)
+            preds = best_model_obj.predict(X_test)
 
             # Metrics
             accuracy = accuracy_score(y_test, preds)
@@ -91,7 +92,6 @@ with mlflow.start_run(run_name="Ensemble_Comparison_Experiment"):
             f1 = f1_score(y_test, preds)
 
             # --- 1. Log Best Parameters to MLflow ---
-            # Prepend parameter names with a clean identifier prefix
             clean_name_prefix = name.replace(' ', '_').lower()
             mlflow.log_params({f"{clean_name_prefix}__{k}": v for k, v in grid_search.best_params_.items()})
 
@@ -104,8 +104,7 @@ with mlflow.start_run(run_name="Ensemble_Comparison_Experiment"):
             })
 
             # --- 3. Log the Best Model Artifact ---
-            # Swapped 'artifact_path' out for 'name' and dropped folder forward-slashes
-            mlflow.sklearn.log_model(best_model, name=f"{clean_name_prefix}_best_model")
+            mlflow.sklearn.log_model(best_model_obj, name=f"{clean_name_prefix}_best_model")
 
             # Store results locally for DataFrame display
             results.append({ 
@@ -121,86 +120,44 @@ with mlflow.start_run(run_name="Ensemble_Comparison_Experiment"):
             print("F1 Score:", f1)
             print("-" * 50)
 
-# Display the local summary DataFrame
-results_df = pd.DataFrame(results)
-results_df
+    # --- Post-Training Evaluation and File Serialization ---
+    results_df = pd.DataFrame(results)
+    print("\nAll Model Results Summary:")
+    print(results_df)
 
-best_models = {}
+    # Identify best model based on F1 Score
+    best_model_row = results_df.sort_values(by='F1 Score', ascending=False).iloc[0]
+    best_model_name = best_model_row['Model']
+    print(f"\nWinner Model: {best_model_name}")
 
-results = []
+    # FIX 2: Extract the actual model object from the dictionary, NOT the string name
+    final_model_object = best_models[best_model_name]
 
-for name, model in models.items():
-  print(f"Training {name}...")
-  grid_search = GridSearchCV(
-      estimator=model,
-      param_grid=params[name],
-      cv=3,
-      scoring='f1',
-      n_jobs=-1
-      )
+    # Save the real model object locally
+    model_path = "pred_maintenance_model_v1.joblib"
+    joblib.dump(final_model_object, model_path)
 
-  grid_search.fit(X_train, y_train)
+    # Log the model file as a generic artifact to the parent run
+    mlflow.log_artifact(model_path, artifact_path="final_production_model")
+    print(f"Model successfully saved as artifact at: {model_path}")
 
-  best_model = grid_search.best_estimator_
-
-  best_models[name] = best_model # Predictions
-
-  preds = best_model.predict(X_test)
-
-  # Metrics
-  accuracy = accuracy_score(y_test, preds)
-  precision = precision_score(y_test, preds)
-  recall = recall_score(y_test, preds)
-  f1 = f1_score(y_test, preds)
-
-  # Store results
-  results.append(
-      { "Model": name,
-        "Best Parameters": grid_search.best_params_,
-        "Accuracy": accuracy,
-        "Precision": precision,
-        "Recall": recall,
-        "F1 Score": f1
-        }
-  )
-  print("Best Parameters:", grid_search.best_params_)
-  print("F1 Score:", f1)
-  print("-" * 50)
-
-#Identify best model
-best_model_row = results_df.sort_values(
-    by='F1 Score',
-    ascending=False ).iloc[0]
-
-best_model = best_model_row['Model']
-print("Best Model:", best_model)
-print(best_model)
-
-# Save the model locally
-model_path = "pred_maintenance_model_v1.joblib"
-joblib.dump(best_model, model_path)
-
-# Log the model artifact
-mlflow.log_artifact(model_path, artifact_path="model")
-print(f"Model saved as artifact at: {model_path}")
-
-# Upload to Hugging Face
+# --- Uploading clean model file to Hugging Face ---
 repo_id = "rajmayank092018/pred-engine-model"
 repo_type = "model"
 
-# Step 1: Check if the space exists
 try:
     api.repo_info(repo_id=repo_id, repo_type=repo_type)
-    print(f"Space '{repo_id}' already exists. Using it.")
+    print(f"Repository '{repo_id}' already exists. Using it.")
 except RepositoryNotFoundError:
-    print(f"Space '{repo_id}' not found. Creating new space...")
+    print(f"Repository '{repo_id}' not found. Creating new repository...")
     create_repo(repo_id=repo_id, repo_type=repo_type, private=False)
-    print(f"Space '{repo_id}' created.")
+    print(f"Repository '{repo_id}' created.")
 
-# create_repo("churn-model", repo_type="model", private=False)
+print("Uploading production binary file to Hugging Face Hub...")
 api.upload_file(
-    path_or_fileobj="pred_maintenance_model_v1.joblib",
+    path_or_fileobj=model_path,
     path_in_repo="pred_maintenance_model_v1.joblib",
     repo_id=repo_id,
     repo_type=repo_type
 )
+print("Upload Complete!")
